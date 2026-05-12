@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "PR Extension Manager",
+  "version": "0.1.0",
+  "identifier": "com.itgenius.pr-extension-manager",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PR Extension Manager",
+        "width": 440,
+        "height": 400,
+        "resizable": false,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "publisher": "itGenius",
+    "shortDescription": "Manage and update the PR Extension for Premiere Pro",
+    "longDescription": "Install, update, and uninstall the PR Extension for Adobe Premiere Pro. Auto-checks GitHub for new releases."
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/georg-itgclaudeAgent/pr-extension/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "pubkey": "REPLACE_WITH_TAURI_PUBLIC_KEY_FROM_TAURI_SIGNER_GENERATE"
+    }
+  }
+}
