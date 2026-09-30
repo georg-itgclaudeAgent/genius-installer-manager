@@ -1,13 +1,16 @@
 import React from "react";
 import { ExtensionState } from "../hooks/useExtensionStatus";
+import type { ExtensionSpec } from "../api/registry";
 
 interface ExtensionCardProps {
+  spec: ExtensionSpec;
   state: ExtensionState;
   busy: boolean;
   premiereWarning: boolean;
   onInstall: () => void;
   onUpdate: () => void;
   onUninstall: () => void;
+  onRetry: () => void;
 }
 
 function summarizeNotes(notes: string): string[] {
@@ -20,12 +23,14 @@ function summarizeNotes(notes: string): string[] {
 }
 
 export const ExtensionCard: React.FC<ExtensionCardProps> = ({
+  spec,
   state,
   busy,
   premiereWarning,
   onInstall,
   onUpdate,
   onUninstall,
+  onRetry,
 }) => {
   const isUpdateAvailable = state.kind === "update-available";
   const cardBorderClass = isUpdateAvailable ? "card highlight" : "card";
@@ -34,12 +39,10 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
     <div className={cardBorderClass}>
       {isUpdateAvailable && <span className="card-new-pill">NEW</span>}
       <div className="card-row">
-        <div className="card-icon">PR</div>
+        <div className="card-icon">{spec.icon}</div>
         <div className="card-meta">
-          <div className="card-title">PR Extension</div>
-          <div className="card-subtitle">
-            For Adobe Premiere Pro · ElevenLabs + HeyGen + Assets
-          </div>
+          <div className="card-title">{spec.name}</div>
+          <div className="card-subtitle">{spec.subtitle}</div>
           <StatusLine state={state} />
         </div>
       </div>
@@ -55,7 +58,7 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
 
       {premiereWarning && (
         <div className="card-warning">
-          Premiere may be running with the extension open — close Premiere before installing/updating.
+          Premiere may be running with {spec.name} open. Close Premiere before installing or updating.
         </div>
       )}
 
@@ -66,6 +69,7 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
           onInstall={onInstall}
           onUpdate={onUpdate}
           onUninstall={onUninstall}
+          onRetry={onRetry}
         />
       </div>
     </div>
@@ -79,11 +83,13 @@ const StatusLine: React.FC<{ state: ExtensionState }> = ({ state }) => {
   if (state.kind === "error") {
     return <div className="card-status"><span className="dot red" /> Error: {state.reason}</div>;
   }
+  if (state.kind === "not-released") {
+    return <div className="card-status"><span className="dot grey" /> Not released yet · check back soon</div>;
+  }
   if (state.kind === "not-installed") {
     return (
       <div className="card-status">
-        <span className="dot grey" /> Not installed
-        {state.latest && <> · Latest: <strong>{state.latest.version}</strong></>}
+        <span className="dot grey" /> Not installed · Latest: <strong>{state.latest.version}</strong>
       </div>
     );
   }
@@ -112,16 +118,20 @@ const CardButtons: React.FC<{
   onInstall: () => void;
   onUpdate: () => void;
   onUninstall: () => void;
-}> = ({ state, busy, onInstall, onUpdate, onUninstall }) => {
+  onRetry: () => void;
+}> = ({ state, busy, onInstall, onUpdate, onUninstall, onRetry }) => {
   if (state.kind === "checking") {
     return <button className="btn-primary" disabled>Checking…</button>;
   }
   if (state.kind === "error") {
-    return <button className="btn-primary" onClick={onInstall} disabled={busy}>Retry</button>;
+    return <button className="btn-primary" onClick={onRetry} disabled={busy}>Retry</button>;
+  }
+  if (state.kind === "not-released") {
+    return <button className="btn-primary" disabled>Not released yet</button>;
   }
   if (state.kind === "not-installed") {
     return (
-      <button className="btn-primary" onClick={onInstall} disabled={busy || !state.latest}>
+      <button className="btn-primary" onClick={onInstall} disabled={busy}>
         {busy ? "Installing…" : "Install"}
       </button>
     );

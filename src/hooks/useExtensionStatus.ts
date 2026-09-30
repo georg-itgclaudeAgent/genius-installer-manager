@@ -1,28 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  fetchLatestExtensionRelease,
-  compareSemver,
-  ExtensionRelease,
-} from "../api/github";
+import { fetchLatestRelease } from "../api/github";
+import type { ExtensionSpec } from "../api/registry";
+import { deriveState, ExtensionState, StatusInfo } from "./useExtensionStatus.logic";
 
-interface StatusInfo {
-  installed: boolean;
-  installed_version: string | null;
-  install_path: string;
-  premiere_running_warning: boolean;
-}
-
-export type ExtensionState =
-  | { kind: "checking" }
-  | { kind: "not-installed"; latest: ExtensionRelease | null }
-  | { kind: "up-to-date"; installedVersion: string; latest: ExtensionRelease }
-  | {
-      kind: "update-available";
-      installedVersion: string;
-      latest: ExtensionRelease;
-    }
-  | { kind: "error"; reason: string };
+export type { ExtensionState } from "./useExtensionStatus.logic";
 
 export interface UseExtensionStatusResult {
   state: ExtensionState;
@@ -35,7 +17,7 @@ export interface UseExtensionStatusResult {
   uninstall: () => Promise<void>;
 }
 
-export function useExtensionStatus(): UseExtensionStatusResult {
+export function useExtensionStatus(spec: ExtensionSpec): UseExtensionStatusResult {
   const [state, setState] = useState<ExtensionState>({ kind: "checking" });
   const [busy, setBusy] = useState(false);
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
@@ -45,75 +27,41 @@ export function useExtensionStatus(): UseExtensionStatusResult {
   const refresh = useCallback(async () => {
     setState({ kind: "checking" });
     try {
-      const status = await invoke<StatusInfo>("get_status");
+      const status = await invoke<StatusInfo>("get_status", { id: spec.id });
       setPremiereWarning(status.premiere_running_warning);
       setInstallPath(status.install_path);
-
-      let latest: ExtensionRelease | null = null;
-      try { latest = await fetchLatestExtensionRelease(); }
-      catch (e: any) { throw new Error(e?.message || String(e)); }
-
+      const latest = await fetchLatestRelease(spec.repo, spec.tag_prefix);
       setLastCheckedAt(new Date());
-
-      if (!status.installed) {
-        setState({ kind: "not-installed", latest });
-        return;
-      }
-      if (!latest) {
-        // Installed but couldn't fetch latest -> treat as up-to-date (no upgrade available)
-        setState({
-          kind: "up-to-date",
-          installedVersion: status.installed_version || "(unknown)",
-          latest: {
-            version: status.installed_version || "0.0.0",
-            tag: "",
-            notes: "",
-            htmlUrl: "",
-            publishedAt: "",
-            zipUrl: "",
-            zipName: "",
-            zipSize: 0,
-          },
-        });
-        return;
-      }
-      const installed = status.installed_version || "0.0.0";
-      if (compareSemver(latest.version, installed) > 0) {
-        setState({ kind: "update-available", installedVersion: installed, latest });
-      } else {
-        setState({ kind: "up-to-date", installedVersion: installed, latest });
-      }
+      setState(deriveState(status, latest));
     } catch (e: any) {
       setState({ kind: "error", reason: e?.message || String(e) });
     }
-  }, []);
+  }, [spec.id, spec.repo, spec.tag_prefix]);
 
   const install = useCallback(async () => {
     if (state.kind !== "not-installed" && state.kind !== "update-available") return;
-    const latest = state.latest;
-    if (!latest) return;
     setBusy(true);
     try {
-      await invoke<string>("install_from_url", { url: latest.zipUrl });
+      await invoke<string>("install_from_url", { id: spec.id, url: state.latest.zipUrl });
       await refresh();
     } catch (e: any) {
       setState({ kind: "error", reason: e?.message || String(e) });
     } finally {
       setBusy(false);
     }
-  }, [state, refresh]);
+  }, [state, spec.id, refresh]);
 
   const uninstall = useCallback(async () => {
     setBusy(true);
     try {
-      await invoke("uninstall_extension");
+      await invoke("uninstall_extension", { id: spec.id });
       await refresh();
     } catch (e: any) {
       setState({ kind: "error", reason: e?.message || String(e) });
     } finally {
       setBusy(false);
     }
-  }, [refresh]);
+  }, [spec.id, refresh]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
