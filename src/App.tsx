@@ -65,8 +65,8 @@ export const App: React.FC = () => {
       )}
 
       <header className="app-header">
-        <div className="app-logo">PR</div>
-        <div className="app-title">PR Extension Manager</div>
+        <div className="app-logo">GI</div>
+        <div className="app-title">Genius Installer Manager</div>
         <div className="app-version">v{MANAGER_VERSION}</div>
       </header>
 

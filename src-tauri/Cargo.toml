@@ -1,7 +1,7 @@
 [package]
-name = "pr-extension-manager"
+name = "genius-installer-manager"
 version = "0.2.0"
-description = "PR Extension Manager"
+description = "Genius Installer Manager"
 authors = ["Georg Miñoza <georg@itgenius.com>"]
 edition = "2021"
 rust-version = "1.77"

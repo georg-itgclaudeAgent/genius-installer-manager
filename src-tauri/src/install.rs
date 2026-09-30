@@ -137,7 +137,7 @@ pub fn check_cep_dir_writable() -> Result<(), String> {
     let dir = paths::cep_extensions_dir();
     fs::create_dir_all(&dir)
         .map_err(|e| format!("Cannot create CEP extensions dir at {:?}: {}", dir, e))?;
-    let probe = dir.join(".pr-extension-manager-write-test");
+    let probe = dir.join(".genius-installer-manager-write-test");
     fs::write(&probe, b"").map_err(|e| format!("CEP extensions dir is not writable: {}", e))?;
     fs::remove_file(&probe).ok();
     Ok(())

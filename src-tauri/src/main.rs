@@ -2,6 +2,7 @@
 
 mod download;
 mod install;
+mod legacy;
 mod paths;
 
 use serde::Serialize;
@@ -71,6 +72,8 @@ fn uninstall_extension(id: String) -> Result<(), String> {
 }
 
 fn main() {
+    legacy::remove_legacy_install();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
