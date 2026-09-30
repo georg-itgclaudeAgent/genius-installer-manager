@@ -25,14 +25,21 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/icon.ico"
     ],
     "publisher": "itGenius",
     "shortDescription": "Install and update itGenius extensions for Adobe Premiere Pro",
-    "longDescription": "Installs, updates and uninstalls itGenius extensions for Adobe Premiere Pro, and checks each extension's GitHub repo for new releases."
+    "longDescription": "Installs, updates and uninstalls itGenius extensions for Adobe Premiere Pro, and checks each extension's GitHub repo for new releases.",
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {
