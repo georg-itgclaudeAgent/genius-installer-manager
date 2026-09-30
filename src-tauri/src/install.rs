@@ -14,24 +14,18 @@ pub(crate) fn read_version_at(dir: &Path) -> Option<String> {
     Some(content[start..start + end_offset].to_string())
 }
 
-pub(crate) fn extract_zip_into(target: &Path, zip_bytes: &[u8]) -> Result<(), String> {
-    // Validate the archive before deleting anything, so a bad download
-    // never leaves the user with no extension at all.
+/// Extract `zip_bytes` into `dir`, which must not exist yet.
+fn extract_zip_into(dir: &Path, zip_bytes: &[u8]) -> Result<(), String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
         .map_err(|e| format!("Failed to read zip: {}", e))?;
-
-    if target.exists() {
-        fs::remove_dir_all(target)
-            .map_err(|e| format!("Failed to remove existing install: {}", e))?;
-    }
-    fs::create_dir_all(target).map_err(|e| format!("Failed to create install dir: {}", e))?;
+    fs::create_dir_all(dir).map_err(|e| format!("Failed to create install dir: {}", e))?;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)
             .map_err(|e| format!("Failed to read zip entry {}: {}", i, e))?;
         let outpath = match entry.enclosed_name() {
-            Some(p) => target.join(p),
-            None => continue, // skip suspicious entries
+            Some(p) => dir.join(p),
+            None => continue, // skip suspicious entries (zip-slip)
         };
         if entry.is_dir() {
             fs::create_dir_all(&outpath)
@@ -47,6 +41,56 @@ pub(crate) fn extract_zip_into(target: &Path, zip_bytes: &[u8]) -> Result<(), St
                 .map_err(|e| format!("Failed to write file {:?}: {}", outpath, e))?;
         }
     }
+    Ok(())
+}
+
+fn read_bundle_id_at(dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(dir.join("CSXS").join("manifest.xml")).ok()?;
+    let needle = "ExtensionBundleId=\"";
+    let start = content.find(needle)? + needle.len();
+    let end_offset = content[start..].find('"')?;
+    Some(content[start..start + end_offset].to_string())
+}
+
+/// Install a release zip for `id` under `base` without ever leaving a
+/// half-written or half-deleted extension behind:
+/// 1. extract into `.<id>.staging` and check its manifest names this bundle id;
+/// 2. rename the live folder to `.<id>.old` — if Windows refuses (Premiere holds
+///    the files open) we stop here and the old install is untouched;
+/// 3. rename staging into place, then delete `.old` best-effort.
+pub(crate) fn install_zip_under(base: &Path, id: &str, zip_bytes: &[u8]) -> Result<(), String> {
+    let target = paths::install_dir_under(base, id)?;
+    let staging = base.join(format!(".{}.staging", id));
+    let old = base.join(format!(".{}.old", id));
+    let _ = remove_dir(&staging);
+    let _ = remove_dir(&old);
+
+    let staged = extract_zip_into(&staging, zip_bytes).and_then(|_| {
+        match read_bundle_id_at(&staging) {
+            Some(b) if b == id => Ok(()),
+            Some(b) => Err(format!("This download is for {}, not {}. Nothing was changed.", b, id)),
+            None => Err("The download has no readable CSXS/manifest.xml. Nothing was changed.".to_string()),
+        }
+    });
+    if let Err(e) = staged {
+        let _ = remove_dir(&staging);
+        return Err(e);
+    }
+
+    if target.exists() {
+        if let Err(e) = fs::rename(&target, &old) {
+            let _ = remove_dir(&staging);
+            return Err(format!(
+                "Couldn't replace the installed files ({}). Close Premiere Pro and try again. Nothing was changed.", e));
+        }
+    }
+    if let Err(e) = fs::rename(&staging, &target) {
+        // Put the previous install back so the user is never left with nothing.
+        if old.exists() { let _ = fs::rename(&old, &target); }
+        let _ = remove_dir(&staging);
+        return Err(format!("Failed to move the new version into place: {}", e));
+    }
+    let _ = remove_dir(&old);
     Ok(())
 }
 
@@ -68,7 +112,7 @@ pub fn is_installed(id: &str) -> bool {
 }
 
 pub fn extract_zip_to_install_dir(id: &str, zip_bytes: &[u8]) -> Result<(), String> {
-    extract_zip_into(&paths::install_dir(id)?, zip_bytes)
+    install_zip_under(&paths::cep_extensions_dir(), id, zip_bytes)
 }
 
 pub fn uninstall(id: &str) -> Result<(), String> {
@@ -124,14 +168,18 @@ mod tests {
     use crate::paths;
     use std::io::Write;
 
-    fn make_zip(manifest_version: &str) -> Vec<u8> {
+    const GC: &str = "com.attract.genius-cut";
+    const PR: &str = "com.attract.pr-extension";
+
+    fn make_zip(bundle_id: &str, manifest_version: &str) -> Vec<u8> {
         let mut buf = std::io::Cursor::new(Vec::new());
         {
             let mut w = zip::ZipWriter::new(&mut buf);
             let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             w.start_file("CSXS/manifest.xml", opts).unwrap();
-            write!(w, r#"<ExtensionManifest ExtensionBundleVersion="{}"/>"#, manifest_version).unwrap();
+            write!(w, r#"<ExtensionManifest ExtensionBundleId="{}" ExtensionBundleVersion="{}"/>"#,
+                bundle_id, manifest_version).unwrap();
             w.start_file("client/index.html", opts).unwrap();
             w.write_all(b"<html></html>").unwrap();
             w.finish().unwrap();
@@ -139,33 +187,77 @@ mod tests {
         buf.into_inner()
     }
 
+    /// Zip whose central directory is intact but whose last entry fails its CRC,
+    /// so it parses fine and only fails part-way through extraction.
+    fn make_corrupt_zip(bundle_id: &str) -> Vec<u8> {
+        let mut z = make_zip(bundle_id, "9.9.9");
+        let at = z.windows(13).position(|w| w == b"<html></html>").unwrap();
+        z[at] = b'X';
+        z
+    }
+
+    fn leftovers(base: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(base).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".staging") || n.contains(".old"))
+            .collect()
+    }
+
     #[test]
-    fn extract_then_read_version() {
+    fn install_then_read_version() {
         let base = tempfile::tempdir().unwrap();
-        let dir = paths::install_dir_under(base.path(), "com.attract.genius-cut").unwrap();
-        extract_zip_into(&dir, &make_zip("0.1.0")).unwrap();
+        install_zip_under(base.path(), GC, &make_zip(GC, "0.1.0")).unwrap();
+        let dir = paths::install_dir_under(base.path(), GC).unwrap();
         assert_eq!(read_version_at(&dir).as_deref(), Some("0.1.0"));
         assert!(dir.join("client/index.html").exists());
+        assert!(leftovers(base.path()).is_empty());
     }
 
     #[test]
     fn reinstall_replaces_previous_files() {
         let base = tempfile::tempdir().unwrap();
-        let dir = paths::install_dir_under(base.path(), "com.attract.genius-cut").unwrap();
-        extract_zip_into(&dir, &make_zip("0.1.0")).unwrap();
+        install_zip_under(base.path(), GC, &make_zip(GC, "0.1.0")).unwrap();
+        let dir = paths::install_dir_under(base.path(), GC).unwrap();
         std::fs::write(dir.join("stale.txt"), b"old").unwrap();
-        extract_zip_into(&dir, &make_zip("0.2.0")).unwrap();
+        install_zip_under(base.path(), GC, &make_zip(GC, "0.2.0")).unwrap();
         assert_eq!(read_version_at(&dir).as_deref(), Some("0.2.0"));
         assert!(!dir.join("stale.txt").exists());
+        assert!(leftovers(base.path()).is_empty());
+    }
+
+    #[test]
+    fn failed_extraction_leaves_the_old_install_untouched() {
+        let base = tempfile::tempdir().unwrap();
+        install_zip_under(base.path(), GC, &make_zip(GC, "0.1.0")).unwrap();
+        let dir = paths::install_dir_under(base.path(), GC).unwrap();
+
+        assert!(install_zip_under(base.path(), GC, &make_corrupt_zip(GC)).is_err());
+
+        assert_eq!(read_version_at(&dir).as_deref(), Some("0.1.0"));
+        assert!(dir.join("client/index.html").exists());
+        assert!(leftovers(base.path()).is_empty());
+    }
+
+    #[test]
+    fn refuses_a_zip_built_for_a_different_extension() {
+        let base = tempfile::tempdir().unwrap();
+        install_zip_under(base.path(), PR, &make_zip(PR, "1.2.0")).unwrap();
+
+        let err = install_zip_under(base.path(), PR, &make_zip(GC, "0.1.0")).unwrap_err();
+
+        assert!(err.contains("com.attract.genius-cut"), "{}", err);
+        let pr = paths::install_dir_under(base.path(), PR).unwrap();
+        assert_eq!(read_version_at(&pr).as_deref(), Some("1.2.0"));
+        assert!(leftovers(base.path()).is_empty());
     }
 
     #[test]
     fn uninstalling_one_leaves_the_other_intact() {
         let base = tempfile::tempdir().unwrap();
-        let pr = paths::install_dir_under(base.path(), "com.attract.pr-extension").unwrap();
-        let gc = paths::install_dir_under(base.path(), "com.attract.genius-cut").unwrap();
-        extract_zip_into(&pr, &make_zip("1.2.0")).unwrap();
-        extract_zip_into(&gc, &make_zip("0.1.0")).unwrap();
+        install_zip_under(base.path(), PR, &make_zip(PR, "1.2.0")).unwrap();
+        install_zip_under(base.path(), GC, &make_zip(GC, "0.1.0")).unwrap();
+        let pr = paths::install_dir_under(base.path(), PR).unwrap();
+        let gc = paths::install_dir_under(base.path(), GC).unwrap();
 
         remove_dir(&gc).unwrap();
 
@@ -183,7 +275,7 @@ mod tests {
     fn public_ops_reject_unknown_ids_without_touching_disk() {
         assert!(uninstall("../..").is_err());
         assert!(uninstall("com.attract.nope").is_err());
-        assert!(extract_zip_to_install_dir("..", &make_zip("9.9.9")).is_err());
+        assert!(extract_zip_to_install_dir("..", &make_zip(GC, "9.9.9")).is_err());
         assert!(!is_installed("../.."));
         assert!(read_installed_version("com.attract.nope").is_none());
     }

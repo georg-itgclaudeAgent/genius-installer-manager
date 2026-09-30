@@ -99,6 +99,11 @@ const StatusLine: React.FC<{ state: ExtensionState }> = ({ state }) => {
         <span className="dot green" />
         <span style={{ color: "#aac9aa" }}>Up to date</span>
         {" · Installed: "}<strong>{state.installedVersion}</strong>
+        {state.updateCheckFailed && (
+          <div className="card-subtitle" title={state.updateCheckFailed}>
+            Couldn't check for updates right now. Try again in a few minutes.
+          </div>
+        )}
       </div>
     );
   }

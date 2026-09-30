@@ -26,3 +26,14 @@ describe("deriveState", () => {
     expect(deriveState(installed("1.2.0"), null)).toMatchObject({ kind: "up-to-date", installedVersion: "1.2.0" });
   });
 });
+
+describe("deriveState when GitHub can't be reached", () => {
+  it("installed → still up-to-date, keeps installed version, flags the failed check", () => {
+    expect(deriveState(installed("1.2.0"), null, "HTTP 403")).toEqual({
+      kind: "up-to-date", installedVersion: "1.2.0", latest: null, updateCheckFailed: "HTTP 403",
+    });
+  });
+  it("not installed → error (nothing to install without a release)", () => {
+    expect(deriveState(notInstalled, null, "HTTP 403")).toEqual({ kind: "error", reason: "HTTP 403" });
+  });
+});

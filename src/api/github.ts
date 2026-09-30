@@ -70,12 +70,38 @@ export function pickLatestRelease(releases: RawRelease[], tagPrefix: string): Ex
   return candidates[0] || null;
 }
 
-export async function fetchLatestRelease(repo: string, tagPrefix: string): Promise<ExtensionRelease | null> {
-  // 50, not 30: three tag channels share one repo, so a quiet channel's latest
-  // release could otherwise fall off the first page.
-  const resp = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${repo}/releases?per_page=50`, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (!resp.ok) throw new Error(`GitHub releases fetch failed: HTTP ${resp.status}`);
-  return pickLatestRelease(await resp.json(), tagPrefix);
+const CACHE_MS = 60_000;
+
+/**
+ * Every card in the Manager asks about the same repo, and unauthenticated
+ * GitHub allows 60 calls an hour per IP (shared across an office). So one
+ * in-flight or recent response per repo is shared by all cards; failures
+ * are never cached, so "Check again" really does retry.
+ */
+export function createReleaseFetcher(fetchFn: typeof fetch, now: () => number) {
+  const cache = new Map<string, { at: number; releases: Promise<RawRelease[]> }>();
+
+  function releasesFor(repo: string): Promise<RawRelease[]> {
+    const hit = cache.get(repo);
+    if (hit && now() - hit.at < CACHE_MS) return hit.releases;
+    // 50, not 30: three tag channels share one repo, so a quiet channel's latest
+    // release could otherwise fall off the first page.
+    const releases = fetchFn(`https://api.github.com/repos/${REPO_OWNER}/${repo}/releases?per_page=50`, {
+      headers: { Accept: "application/vnd.github+json" },
+    }).then(async (resp) => {
+      if (!resp.ok) throw new Error(`GitHub releases fetch failed: HTTP ${resp.status}`);
+      return (await resp.json()) as RawRelease[];
+    });
+    releases.catch(() => cache.delete(repo));
+    cache.set(repo, { at: now(), releases });
+    return releases;
+  }
+
+  return {
+    async fetchLatestRelease(repo: string, tagPrefix: string): Promise<ExtensionRelease | null> {
+      return pickLatestRelease(await releasesFor(repo), tagPrefix);
+    },
+  };
 }
+
+export const { fetchLatestRelease } = createReleaseFetcher((...a) => fetch(...a), () => Date.now());

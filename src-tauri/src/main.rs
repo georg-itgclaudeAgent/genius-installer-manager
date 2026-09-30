@@ -32,13 +32,26 @@ fn get_status(id: String) -> Result<StatusInfo, String> {
 
 #[tauri::command]
 async fn install_from_url(id: String, url: String) -> Result<String, String> {
-    paths::install_dir(&id)?; // reject unknown ids before any network or disk work
-    if !download::is_allowed_download_url(&url) {
+    // Reject unknown ids before any network or disk work.
+    let spec = paths::find(&id).ok_or_else(|| format!("Unknown extension id: {:?}", id))?;
+    if !download::is_allowed_download_url(&url, spec) {
         return Err(format!("Refusing to download from an untrusted location: {}", url));
     }
     install::check_cep_dir_writable()?;
 
-    let resp = reqwest::get(&url).await.map_err(|e| format!("Download failed: {}", e))?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("too many redirects")
+            } else if download::is_allowed_redirect(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+        .map_err(|e| format!("Download failed: {}", e))?;
+    let resp = client.get(&url).send().await.map_err(|e| format!("Download failed: {}", e))?;
     if !resp.status().is_success() {
         return Err(format!("Download failed: HTTP {}", resp.status()));
     }

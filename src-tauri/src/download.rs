@@ -1,35 +1,103 @@
-/// Only GitHub release assets from our own account may be installed.
-/// `browser_download_url` is github.com/<owner>/...; GitHub then 302s to
-/// objects.githubusercontent.com, which reqwest follows.
-pub fn is_allowed_download_url(url: &str) -> bool {
-    const OWNER_PREFIX: &str = "https://github.com/georg-itgclaudeAgent/";
-    const CDN_PREFIX: &str = "https://objects.githubusercontent.com/";
-    url.starts_with(OWNER_PREFIX) || url.starts_with(CDN_PREFIX)
+use crate::paths::ExtensionSpec;
+use reqwest::Url;
+
+const OWNER: &str = "georg-itgclaudeAgent";
+
+/// A download is allowed only if, after WHATWG normalisation (which collapses
+/// `..` and `%2e%2e`), it is exactly
+/// `https://github.com/<OWNER>/<spec.repo>/releases/download/<tag>/<file>.zip`
+/// with `<tag>` on this extension's own channel. That ties the URL to the id,
+/// so one extension's zip can never be extracted into another's folder.
+pub fn is_allowed_download_url(url: &str, spec: &ExtensionSpec) -> bool {
+    let Ok(u) = Url::parse(url) else { return false };
+    if u.scheme() != "https" || u.host_str() != Some("github.com") || u.port().is_some() {
+        return false;
+    }
+    if !u.username().is_empty() || u.password().is_some() || u.query().is_some() || u.fragment().is_some() {
+        return false;
+    }
+    let Some(segs) = u.path_segments() else { return false };
+    let segs: Vec<&str> = segs.collect();
+    matches!(segs.as_slice(),
+        [owner, repo, "releases", "download", tag, file]
+            if *owner == OWNER
+            && *repo == spec.repo
+            && tag.starts_with(spec.tag_prefix)
+            && file.ends_with(".zip"))
+}
+
+/// GitHub serves release assets by redirecting from github.com to a
+/// *.githubusercontent.com CDN host. Any other hop is refused.
+pub fn is_allowed_redirect(url: &Url) -> bool {
+    url.scheme() == "https"
+        && match url.host_str() {
+            Some("github.com") => true,
+            Some(h) => h.ends_with(".githubusercontent.com"),
+            None => false,
+        }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths;
+
+    fn gc() -> &'static paths::ExtensionSpec { paths::find("com.attract.genius-cut").unwrap() }
+    fn pr() -> &'static paths::ExtensionSpec { paths::find("com.attract.pr-extension").unwrap() }
+
+    const GC_ZIP: &str =
+        "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/genius-cut-0.1.0.zip";
 
     #[test]
-    fn allows_github_release_assets() {
+    fn allows_this_extensions_own_release_asset() {
+        assert!(is_allowed_download_url(GC_ZIP, gc()));
         assert!(is_allowed_download_url(
-            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/genius-cut.zip"));
-        assert!(is_allowed_download_url(
-            "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/abc"));
+            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/extension-v1.2.0/pr-extension-1.2.0.zip",
+            pr()));
+    }
+
+    #[test]
+    fn refuses_another_extensions_release() {
+        // Genius Cut zip must never be extracted into the PR Extension folder.
+        assert!(!is_allowed_download_url(GC_ZIP, pr()));
+    }
+
+    #[test]
+    fn refuses_dot_segment_and_encoded_traversal() {
+        for bad in [
+            "https://github.com/georg-itgclaudeAgent/../someone-else/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/%2e%2e/evil/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/../../../../evil/x.zip",
+        ] {
+            assert!(!is_allowed_download_url(bad, gc()), "allowed {:?}", bad);
+        }
     }
 
     #[test]
     fn refuses_everything_else() {
         for bad in [
-            "http://github.com/georg-itgclaudeAgent/pr-extension/releases/download/x.zip", // not https
-            "https://github.com.evil.example/x.zip",
-            "https://evil.example/github.com/x.zip",
-            "https://github.com/someone-else/pr-extension/releases/download/x.zip",
+            "http://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://github.com.evil.example/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://evil.example/github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://github.com/someone-else/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/other-repo/releases/download/geniuscut-v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.exe",
+            "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/abc",
             "file:///C:/Windows/system32",
             "",
         ] {
-            assert!(!is_allowed_download_url(bad), "allowed {:?}", bad);
+            assert!(!is_allowed_download_url(bad, gc()), "allowed {:?}", bad);
         }
+    }
+
+    #[test]
+    fn redirects_only_to_github_hosts_over_https() {
+        let ok = |s: &str| is_allowed_redirect(&reqwest::Url::parse(s).unwrap());
+        assert!(ok("https://release-assets.githubusercontent.com/github-production-release-asset/1/2"));
+        assert!(ok("https://objects.githubusercontent.com/github-production-release-asset-2e65be/1"));
+        assert!(ok("https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/x/y.zip"));
+        assert!(!ok("http://release-assets.githubusercontent.com/x"));
+        assert!(!ok("https://githubusercontent.com.evil.example/x"));
+        assert!(!ok("https://evil.example/x"));
     }
 }

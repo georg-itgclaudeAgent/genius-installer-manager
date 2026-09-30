@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickLatestRelease, RawRelease } from "./github";
+import { pickLatestRelease, createReleaseFetcher, RawRelease } from "./github";
 
 function rel(tag: string, opts: Partial<RawRelease> = {}): RawRelease {
   return {
@@ -45,5 +45,46 @@ describe("pickLatestRelease", () => {
       rel("geniuscut-v0.2.0"),
     ], "geniuscut-v");
     expect(r?.version).toBe("0.2.0");
+  });
+});
+
+describe("createReleaseFetcher", () => {
+  function fakeFetch(body: unknown, status = 200) {
+    let calls = 0;
+    const fn = (async () => {
+      calls++;
+      return { ok: status === 200, status, json: async () => body } as Response;
+    }) as unknown as typeof fetch;
+    return { fn, calls: () => calls };
+  }
+
+  it("shares one GitHub call across extensions in the same repo", async () => {
+    const f = fakeFetch([rel("extension-v1.2.0"), rel("geniuscut-v0.1.0")]);
+    const { fetchLatestRelease } = createReleaseFetcher(f.fn, () => 1000);
+    const [pr, gc] = await Promise.all([
+      fetchLatestRelease("pr-extension", "extension-v"),
+      fetchLatestRelease("pr-extension", "geniuscut-v"),
+    ]);
+    expect(pr?.version).toBe("1.2.0");
+    expect(gc?.version).toBe("0.1.0");
+    expect(f.calls()).toBe(1);
+  });
+
+  it("refetches after the cache window", async () => {
+    let t = 0;
+    const f = fakeFetch([rel("extension-v1.2.0")]);
+    const { fetchLatestRelease } = createReleaseFetcher(f.fn, () => t);
+    await fetchLatestRelease("pr-extension", "extension-v");
+    t = 61_000;
+    await fetchLatestRelease("pr-extension", "extension-v");
+    expect(f.calls()).toBe(2);
+  });
+
+  it("does not cache a failure", async () => {
+    const f = fakeFetch({}, 403);
+    const { fetchLatestRelease } = createReleaseFetcher(f.fn, () => 1000);
+    await expect(fetchLatestRelease("pr-extension", "extension-v")).rejects.toThrow(/403/);
+    await expect(fetchLatestRelease("pr-extension", "extension-v")).rejects.toThrow(/403/);
+    expect(f.calls()).toBe(2);
   });
 });

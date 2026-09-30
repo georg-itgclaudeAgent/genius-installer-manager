@@ -30,9 +30,15 @@ export function useExtensionStatus(spec: ExtensionSpec): UseExtensionStatusResul
       const status = await invoke<StatusInfo>("get_status", { id: spec.id });
       setPremiereWarning(status.premiere_running_warning);
       setInstallPath(status.install_path);
-      const latest = await fetchLatestRelease(spec.repo, spec.tag_prefix);
-      setLastCheckedAt(new Date());
-      setState(deriveState(status, latest));
+      let latest = null;
+      let updateCheckError: string | undefined;
+      try {
+        latest = await fetchLatestRelease(spec.repo, spec.tag_prefix);
+        setLastCheckedAt(new Date());
+      } catch (e: any) {
+        updateCheckError = e?.message || String(e);
+      }
+      setState(deriveState(status, latest, updateCheckError));
     } catch (e: any) {
       setState({ kind: "error", reason: e?.message || String(e) });
     }

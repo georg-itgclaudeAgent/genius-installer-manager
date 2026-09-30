@@ -11,11 +11,26 @@ export type ExtensionState =
   | { kind: "checking" }
   | { kind: "not-released" }
   | { kind: "not-installed"; latest: ExtensionRelease }
-  | { kind: "up-to-date"; installedVersion: string; latest: ExtensionRelease | null }
+  | { kind: "up-to-date"; installedVersion: string; latest: ExtensionRelease | null; updateCheckFailed?: string }
   | { kind: "update-available"; installedVersion: string; latest: ExtensionRelease }
   | { kind: "error"; reason: string };
 
-export function deriveState(status: StatusInfo, latest: ExtensionRelease | null): ExtensionState {
+export function deriveState(
+  status: StatusInfo,
+  latest: ExtensionRelease | null,
+  updateCheckError?: string,
+): ExtensionState {
+  if (updateCheckError) {
+    // An installed extension still works offline — keep its version and
+    // Uninstall button visible rather than turning the whole card into an error.
+    if (!status.installed) return { kind: "error", reason: updateCheckError };
+    return {
+      kind: "up-to-date",
+      installedVersion: status.installed_version || "0.0.0",
+      latest: null,
+      updateCheckFailed: updateCheckError,
+    };
+  }
   if (!status.installed) {
     return latest ? { kind: "not-installed", latest } : { kind: "not-released" };
   }
