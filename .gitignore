@@ -1,0 +1,14 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+.superpowers/
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.zip
+*.exe
+.env
+.env.local

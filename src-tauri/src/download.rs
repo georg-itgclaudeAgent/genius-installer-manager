@@ -46,7 +46,14 @@ mod tests {
     fn pr() -> &'static paths::ExtensionSpec { paths::find("com.attract.pr-extension").unwrap() }
 
     const GC_ZIP: &str =
-        "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/genius-cut-0.1.0.zip";
+        "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/genius-cut-0.1.0.zip";
+
+    #[test]
+    fn refuses_genius_cut_zip_from_the_wrong_repo() {
+        assert!(!is_allowed_download_url(
+            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/v0.1.0/genius-cut-0.1.0.zip",
+            gc()));
+    }
 
     #[test]
     fn allows_this_extensions_own_release_asset() {
@@ -65,9 +72,9 @@ mod tests {
     #[test]
     fn refuses_dot_segment_and_encoded_traversal() {
         for bad in [
-            "https://github.com/georg-itgclaudeAgent/../someone-else/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://github.com/georg-itgclaudeAgent/%2e%2e/evil/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/../../../../evil/x.zip",
+            "https://github.com/georg-itgclaudeAgent/../someone-else/genius-cut/releases/download/v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/%2e%2e/evil/genius-cut/releases/download/v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/../../../../evil/x.zip",
         ] {
             assert!(!is_allowed_download_url(bad, gc()), "allowed {:?}", bad);
         }
@@ -76,12 +83,12 @@ mod tests {
     #[test]
     fn refuses_everything_else() {
         for bad in [
-            "http://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://github.com.evil.example/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://evil.example/github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://github.com/someone-else/pr-extension/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://github.com/georg-itgclaudeAgent/other-repo/releases/download/geniuscut-v0.1.0/x.zip",
-            "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/geniuscut-v0.1.0/x.exe",
+            "http://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/x.zip",
+            "https://github.com.evil.example/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/x.zip",
+            "https://evil.example/github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/x.zip",
+            "https://github.com/someone-else/genius-cut/releases/download/v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/other-repo/releases/download/v0.1.0/x.zip",
+            "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/x.exe",
             "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/abc",
             "file:///C:/Windows/system32",
             "",

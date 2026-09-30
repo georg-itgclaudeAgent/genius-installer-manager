@@ -28,8 +28,8 @@ pub const EXTENSIONS: &[ExtensionSpec] = &[
         name: "Genius Cut",
         subtitle: "For Adobe Premiere Pro · Transcript-driven trimming",
         icon: "GC",
-        repo: "pr-extension",
-        tag_prefix: "geniuscut-v",
+        repo: "genius-cut",
+        tag_prefix: "v",
     },
 ];
 
@@ -70,15 +70,22 @@ mod tests {
     }
 
     #[test]
-    fn tag_prefixes_are_distinct_and_not_prefixes_of_each_other() {
+    fn tag_prefixes_dont_bleed_within_a_shared_repo() {
         for a in EXTENSIONS {
             for b in EXTENSIONS {
-                if a.id != b.id {
+                if a.id != b.id && a.repo == b.repo {
                     assert!(!a.tag_prefix.starts_with(b.tag_prefix),
-                        "{} bleeds into {}", a.tag_prefix, b.tag_prefix);
+                        "{} bleeds into {} in repo {}", a.tag_prefix, b.tag_prefix, a.repo);
                 }
             }
         }
+    }
+
+    #[test]
+    fn each_extension_has_its_own_repo() {
+        assert_eq!(find("com.attract.pr-extension").unwrap().repo, "pr-extension");
+        assert_eq!(find("com.attract.genius-cut").unwrap().repo, "genius-cut");
+        assert_eq!(find("com.attract.genius-cut").unwrap().tag_prefix, "v");
     }
 
     #[test]
