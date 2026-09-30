@@ -67,6 +67,9 @@ html, body, #root {
   flex: 1;
   padding: 14px 16px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .card {

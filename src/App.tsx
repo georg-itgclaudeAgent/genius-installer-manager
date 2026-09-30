@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useExtensionStatus } from "./hooks/useExtensionStatus";
 import { useManagerUpdate } from "./hooks/useManagerUpdate";
 import { ExtensionCard } from "./components/ExtensionCard";
 import { ManagerUpdateBanner } from "./components/ManagerUpdateBanner";
+import { listExtensions, ExtensionSpec } from "./api/registry";
 
-const MANAGER_VERSION = "0.1.0";
+const MANAGER_VERSION = "0.2.0";
 
 function relativeTime(d: Date | null): string {
   if (!d) return "never";
@@ -15,9 +16,43 @@ function relativeTime(d: Date | null): string {
   return `${Math.round(sec / 3600)}h ago`;
 }
 
+/** One hook per card — hooks can't be called in a loop, so each card owns its own. */
+const ManagedExtension: React.FC<{
+  spec: ExtensionSpec;
+  refreshSignal: number;
+  onChecked: (d: Date) => void;
+}> = ({ spec, refreshSignal, onChecked }) => {
+  const ext = useExtensionStatus(spec);
+  useEffect(() => { if (refreshSignal > 0) ext.refresh(); }, [refreshSignal]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ext.lastCheckedAt) onChecked(ext.lastCheckedAt); }, [ext.lastCheckedAt, onChecked]);
+  return (
+    <ExtensionCard
+      spec={spec}
+      state={ext.state}
+      busy={ext.busy}
+      premiereWarning={ext.premiereWarning}
+      onInstall={ext.install}
+      onUpdate={ext.install}
+      onUninstall={ext.uninstall}
+      onRetry={ext.refresh}
+    />
+  );
+};
+
 export const App: React.FC = () => {
-  const ext = useExtensionStatus();
   const mgr = useManagerUpdate();
+  const [specs, setSpecs] = useState<ExtensionSpec[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    listExtensions().then(setSpecs).catch((e) => setLoadError(e?.message || String(e)));
+  }, []);
+
+  const onChecked = useCallback((d: Date) => {
+    setLastCheckedAt((prev) => (!prev || d > prev ? d : prev));
+  }, []);
 
   return (
     <div className="app">
@@ -36,20 +71,16 @@ export const App: React.FC = () => {
       </header>
 
       <main className="app-main">
-        <ExtensionCard
-          state={ext.state}
-          busy={ext.busy}
-          premiereWarning={ext.premiereWarning}
-          onInstall={ext.install}
-          onUpdate={ext.install}
-          onUninstall={ext.uninstall}
-        />
+        {loadError && <div className="card-warning">Couldn't load the extension list: {loadError}</div>}
+        {specs?.map((spec) => (
+          <ManagedExtension key={spec.id} spec={spec} refreshSignal={refreshSignal} onChecked={onChecked} />
+        ))}
       </main>
 
       <footer className="app-footer">
-        <span>Last checked: {relativeTime(ext.lastCheckedAt)}</span>
+        <span>Last checked: {relativeTime(lastCheckedAt)}</span>
         <a
-          onClick={(e) => { e.preventDefault(); ext.refresh(); }}
+          onClick={(e) => { e.preventDefault(); setRefreshSignal((n) => n + 1); }}
           href="#"
           className="footer-link"
         >

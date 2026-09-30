@@ -1,6 +1,6 @@
 [package]
 name = "pr-extension-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "PR Extension Manager"
 authors = ["Georg Miñoza <georg@itgenius.com>"]
 edition = "2021"
