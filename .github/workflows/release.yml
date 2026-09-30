@@ -1,0 +1,108 @@
+name: Release Genius Installer Manager
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tauri (signed)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: npx tauri build
+
+      - name: Locate artifacts
+        id: artifacts
+        shell: bash
+        run: |
+          BUNDLE_DIR="src-tauri/target/release/bundle/nsis"
+          # Tauri 2.x names installers like: "App Name_1.2.3_x64-setup.exe"
+          NSIS=$(find "$BUNDLE_DIR" -name '*setup.exe' -not -name '*.sig' -print -quit)
+          SIG=$(find "$BUNDLE_DIR" -name '*setup.exe.sig' -print -quit)
+          if [ -z "$NSIS" ] || [ -z "$SIG" ]; then
+            echo "NSIS installer or signature not found! Listing:"
+            ls -R src-tauri/target/release/bundle/
+            exit 1
+          fi
+          # Copy to release-friendly names (no spaces, predictable)
+          cp "$NSIS" "GeniusInstallerManager-Setup-${{ steps.ver.outputs.version }}.exe"
+          cp "$SIG" "GeniusInstallerManager-Setup-${{ steps.ver.outputs.version }}.exe.sig"
+          echo "exe=GeniusInstallerManager-Setup-${{ steps.ver.outputs.version }}.exe" >> "$GITHUB_OUTPUT"
+          echo "sig=GeniusInstallerManager-Setup-${{ steps.ver.outputs.version }}.exe.sig" >> "$GITHUB_OUTPUT"
+
+      - name: Build latest.json for Tauri updater
+        id: latest
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          SIGNATURE=$(cat "${{ steps.artifacts.outputs.sig }}")
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # The URL must point at where GitHub will host the .exe after the release is created.
+          URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${{ steps.artifacts.outputs.exe }}"
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See the release page on GitHub for details.",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "${SIGNATURE}",
+                "url": "${URL}"
+              }
+            }
+          }
+          EOF
+          cat latest.json
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "${{ steps.artifacts.outputs.exe }}" \
+            "${{ steps.artifacts.outputs.sig }}" \
+            "latest.json" \
+            --title "Genius Installer Manager ${{ steps.ver.outputs.version }}" \
+            --latest \
+            --generate-notes
