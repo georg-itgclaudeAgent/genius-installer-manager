@@ -1,7 +1,4 @@
 const REPO_OWNER = "georg-itgclaudeAgent";
-const REPO_NAME = "pr-extension";
-const API_BASE = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
-const EXTENSION_TAG_PREFIX = "extension-v";
 const VERSION_REGEX = /^(\d+)\.(\d+)\.(\d+)$/;
 
 export interface ExtensionRelease {
@@ -21,7 +18,7 @@ interface RawAsset {
   size: number;
 }
 
-interface RawRelease {
+export interface RawRelease {
   tag_name: string;
   body: string | null;
   html_url: string;
@@ -48,30 +45,37 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-export async function fetchLatestExtensionRelease(): Promise<ExtensionRelease | null> {
-  const resp = await fetch(`${API_BASE}/releases?per_page=30`, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (!resp.ok) throw new Error(`GitHub releases fetch failed: HTTP ${resp.status}`);
-  const releases: RawRelease[] = await resp.json();
+/** Highest stable semver release on one tag channel, or null if that channel has none. */
+export function pickLatestRelease(releases: RawRelease[], tagPrefix: string): ExtensionRelease | null {
   const candidates = releases
-    .filter((r) => !r.draft && !r.prerelease && r.tag_name.startsWith(EXTENSION_TAG_PREFIX))
-    .map((r) => {
-      const version = r.tag_name.slice(EXTENSION_TAG_PREFIX.length);
-      const zipAsset = r.assets.find((a) => a.name.endsWith(".zip"));
-      if (!zipAsset) return null;
+    .filter((r) => !r.draft && !r.prerelease && r.tag_name.startsWith(tagPrefix))
+    .map((r): ExtensionRelease | null => {
+      const version = r.tag_name.slice(tagPrefix.length);
+      if (!parseSemver(version)) return null;
+      const zip = r.assets.find((a) => a.name.endsWith(".zip"));
+      if (!zip) return null;
       return {
         version,
         tag: r.tag_name,
         notes: r.body || "",
         htmlUrl: r.html_url,
         publishedAt: r.published_at,
-        zipUrl: zipAsset.browser_download_url,
-        zipName: zipAsset.name,
-        zipSize: zipAsset.size,
-      } as ExtensionRelease;
+        zipUrl: zip.browser_download_url,
+        zipName: zip.name,
+        zipSize: zip.size,
+      };
     })
-    .filter((r): r is ExtensionRelease => r !== null && parseSemver(r.version) !== null)
+    .filter((r): r is ExtensionRelease => r !== null)
     .sort((a, b) => compareSemver(b.version, a.version));
   return candidates[0] || null;
+}
+
+export async function fetchLatestRelease(repo: string, tagPrefix: string): Promise<ExtensionRelease | null> {
+  // 50, not 30: three tag channels share one repo, so a quiet channel's latest
+  // release could otherwise fall off the first page.
+  const resp = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${repo}/releases?per_page=50`, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!resp.ok) throw new Error(`GitHub releases fetch failed: HTTP ${resp.status}`);
+  return pickLatestRelease(await resp.json(), tagPrefix);
 }
