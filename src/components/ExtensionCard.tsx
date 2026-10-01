@@ -1,12 +1,17 @@
 import React from "react";
 import { ExtensionState } from "../hooks/useExtensionStatus";
 import type { ExtensionSpec } from "../api/registry";
+import { runtimeLine, RuntimeStatus, RuntimeProgress } from "../hooks/useExtensionStatus.logic";
 
 interface ExtensionCardProps {
   spec: ExtensionSpec;
   state: ExtensionState;
   busy: boolean;
   premiereWarning: boolean;
+  runtime?: RuntimeStatus | null;
+  progress?: RuntimeProgress | null;
+  runtimeError?: string | null;
+  onFinishSetup?: () => void;
   onInstall: () => void;
   onUpdate: () => void;
   onUninstall: () => void;
@@ -29,6 +34,10 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
   state,
   busy,
   premiereWarning,
+  runtime = null,
+  progress = null,
+  runtimeError = null,
+  onFinishSetup,
   onInstall,
   onUpdate,
   onUninstall,
@@ -36,6 +45,9 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
   isNew,
 }) => {
   const isUpdateAvailable = state.kind === "update-available";
+  const installed = state.kind === "up-to-date" || state.kind === "update-available";
+  const line = spec.runtime && installed ? runtimeLine(runtime, progress) : progress ? runtimeLine(null, progress) : null;
+  const needsSetup = !!spec.runtime && installed && !!runtime && !runtime.installed && !progress;
   const cardBorderClass = isUpdateAvailable ? "card highlight" : "card";
 
   return (
@@ -48,6 +60,8 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
           <div className="card-title">{spec.name}</div>
           <div className="card-subtitle">{spec.subtitle}</div>
           <StatusLine state={state} />
+          {line && <div className="card-subtitle">{line}</div>}
+          {runtimeError && <div className="card-status"><span className="dot red" /> {runtimeError}</div>}
         </div>
       </div>
 
@@ -75,6 +89,11 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
           onUninstall={onUninstall}
           onRetry={onRetry}
         />
+        {needsSetup && onFinishSetup && (
+          <button className="btn-primary" onClick={onFinishSetup} disabled={busy}>
+            {busy ? "Setting up…" : "Finish setup"}
+          </button>
+        )}
       </div>
     </div>
   );

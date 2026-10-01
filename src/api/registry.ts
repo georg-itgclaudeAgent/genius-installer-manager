@@ -8,6 +8,7 @@ export interface ExtensionSpec {
   icon: string;
   repo: string;
   tag_prefix: string;
+  runtime?: { tag_prefix: string };
 }
 
 export function listExtensions(): Promise<ExtensionSpec[]> {

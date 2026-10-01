@@ -40,3 +40,15 @@ export function deriveState(
   }
   return { kind: "up-to-date", installedVersion, latest };
 }
+
+export interface RuntimeStatus { installed: boolean; version: string | null; flavour: "cuda" | "cpu"; latest: string | null }
+export interface RuntimeProgress { downloaded: number; total: number | null }
+
+export function runtimeLine(rt: RuntimeStatus | null, progress: RuntimeProgress | null): string | null {
+  const mb = (n: number) => Math.round(n / 2 ** 20);
+  if (progress) return progress.total ? `Setting up: ${mb(progress.downloaded)} of ${mb(progress.total)} MB` : `Setting up: ${mb(progress.downloaded)} MB`;
+  if (!rt) return null;
+  if (!rt.installed) return `Needs a one-time setup (about ${rt.flavour === "cuda" ? "0.8 GB, GPU" : "0.1 GB"})`;
+  if (rt.latest && rt.version && compareSemver(rt.latest, rt.version) > 0) return `Runtime update available (${rt.version} → ${rt.latest})`;
+  return null;
+}

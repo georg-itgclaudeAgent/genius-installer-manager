@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveState, StatusInfo } from "./useExtensionStatus.logic";
+import { deriveState, runtimeLine, StatusInfo } from "./useExtensionStatus.logic";
 import type { ExtensionRelease } from "../api/github";
 
 const notInstalled: StatusInfo = { installed: false, installed_version: null, install_path: "x", premiere_running_warning: false };
@@ -35,5 +35,24 @@ describe("deriveState when GitHub can't be reached", () => {
   });
   it("not installed → error (nothing to install without a release)", () => {
     expect(deriveState(notInstalled, null, "HTTP 403")).toEqual({ kind: "error", reason: "HTTP 403" });
+  });
+});
+
+describe("runtimeLine", () => {
+  it("says what one-time setup will download, in plain words", () => {
+    expect(runtimeLine({ installed: false, version: null, flavour: "cuda", latest: "1.0.0" }, null))
+      .toBe("Needs a one-time setup (about 0.8 GB, GPU)");
+    expect(runtimeLine({ installed: false, version: null, flavour: "cpu", latest: "1.0.0" }, null))
+      .toBe("Needs a one-time setup (about 0.1 GB)");
+  });
+  it("shows progress while downloading", () => {
+    expect(runtimeLine(null, { downloaded: 300 * 2 ** 20, total: 800 * 2 ** 20 })).toBe("Setting up: 300 of 800 MB");
+  });
+  it("is quiet when the runtime is current", () => {
+    expect(runtimeLine({ installed: true, version: "1.0.0", flavour: "cuda", latest: "1.0.0" }, null)).toBeNull();
+  });
+  it("offers a runtime update when a newer one exists", () => {
+    expect(runtimeLine({ installed: true, version: "1.0.0", flavour: "cuda", latest: "1.1.0" }, null))
+      .toBe("Runtime update available (1.0.0 → 1.1.0)");
   });
 });
