@@ -1,4 +1,5 @@
-import { compareSemver, ExtensionRelease } from "../api/github";
+import { compareSemver, parseSemver, ExtensionRelease } from "../api/github";
+import type { RuntimeSpec } from "../api/registry";
 
 export interface StatusInfo {
   installed: boolean;
@@ -41,14 +42,27 @@ export function deriveState(
   return { kind: "up-to-date", installedVersion, latest };
 }
 
-export interface RuntimeStatus { installed: boolean; version: string | null; flavour: "cuda" | "cpu"; latest: string | null }
-export interface RuntimeProgress { downloaded: number; total: number | null }
+/** `needed` is false when the installed build predates the runtime (or isn't installed). */
+export interface RuntimeStatus { needed: boolean; installed: boolean; version: string | null; flavour: "cuda" | "cpu"; latest: string | null }
+export interface RuntimeProgress { downloaded: number; total: number | null; phase?: "unpacking" }
+
+/** Does extension `version` (installed, or about to be) use the runtime? Mirrors runtime::needed in Rust. */
+export function runtimeNeededFor(rt: RuntimeSpec | undefined, version: string): boolean {
+  if (!rt || !parseSemver(version) || !parseSemver(rt.from_version)) return false;
+  return compareSemver(version, rt.from_version) >= 0;
+}
 
 export function runtimeLine(rt: RuntimeStatus | null, progress: RuntimeProgress | null): string | null {
   const mb = (n: number) => Math.round(n / 2 ** 20);
+  if (progress?.phase === "unpacking") return "Unpacking…";
   if (progress) return progress.total ? `Setting up: ${mb(progress.downloaded)} of ${mb(progress.total)} MB` : `Setting up: ${mb(progress.downloaded)} MB`;
-  if (!rt) return null;
-  if (!rt.installed) return `Needs a one-time setup (about ${rt.flavour === "cuda" ? "0.8 GB, GPU" : "0.1 GB"})`;
+  if (!rt || !rt.needed) return null;
+  if (!rt.installed) return rt.latest ? `Needs a one-time setup (about ${rt.flavour === "cuda" ? "0.8 GB, GPU" : "0.1 GB"})` : null;
   if (rt.latest && rt.version && compareSemver(rt.latest, rt.version) > 0) return `Runtime update available (${rt.version} → ${rt.latest})`;
   return null;
+}
+
+/** Show "Finish setup": the build uses the runtime, one is released, it's missing, and nothing is running. */
+export function runtimeNeedsSetup(rt: RuntimeStatus | null, progress: RuntimeProgress | null): boolean {
+  return !!rt && rt.needed && !rt.installed && !!rt.latest && !progress;
 }

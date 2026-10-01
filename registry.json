@@ -16,7 +16,7 @@
       "icon": "GC",
       "repo": "genius-cut",
       "tag_prefix": "v",
-      "runtime": { "tag_prefix": "runtime-v" }
+      "runtime": { "tag_prefix": "runtime-v", "from_version": "0.2.0" }
     }
   ]
 }

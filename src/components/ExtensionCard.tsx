@@ -1,7 +1,7 @@
 import React from "react";
 import { ExtensionState } from "../hooks/useExtensionStatus";
 import type { ExtensionSpec } from "../api/registry";
-import { runtimeLine, RuntimeStatus, RuntimeProgress } from "../hooks/useExtensionStatus.logic";
+import { runtimeLine, runtimeNeedsSetup, RuntimeStatus, RuntimeProgress } from "../hooks/useExtensionStatus.logic";
 
 interface ExtensionCardProps {
   spec: ExtensionSpec;
@@ -47,7 +47,7 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
   const isUpdateAvailable = state.kind === "update-available";
   const installed = state.kind === "up-to-date" || state.kind === "update-available";
   const line = spec.runtime && installed ? runtimeLine(runtime, progress) : progress ? runtimeLine(null, progress) : null;
-  const needsSetup = !!spec.runtime && installed && !!runtime && !runtime.installed && !progress;
+  const needsSetup = !!spec.runtime && installed && runtimeNeedsSetup(runtime, progress);
   const cardBorderClass = isUpdateAvailable ? "card highlight" : "card";
 
   return (

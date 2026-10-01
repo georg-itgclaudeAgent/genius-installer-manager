@@ -139,17 +139,13 @@ fn system32() -> std::path::PathBuf {
 
 #[derive(Serialize)]
 struct RuntimeStatus {
+    /// False for extension builds older than the runtime's `from_version` (or not installed):
+    /// the card then shows no runtime line or setup button.
+    needed: bool,
     installed: bool,
     version: Option<String>,
     flavour: &'static str,
     latest: Option<String>,
-}
-
-fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() != 3 { return None; }
-    let n = |p: &str| if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) { p.parse::<u64>().ok() } else { None };
-    Some((n(parts[0])?, n(parts[1])?, n(parts[2])?))
 }
 
 /// Highest stable `<prefix><semver>` tag among a GitHub releases list.
@@ -157,7 +153,7 @@ fn pick_latest_runtime(releases: &[serde_json::Value], prefix: &str) -> Option<S
     releases.iter()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false) && !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| r["tag_name"].as_str()?.strip_prefix(prefix).map(str::to_string))
-        .filter_map(|v| parse_semver(&v).map(|k| (k, v)))
+        .filter_map(|v| runtime::parse_semver(&v).map(|k| (k, v)))
         .max_by_key(|(k, _)| *k)
         .map(|(_, v)| v)
 }
@@ -185,14 +181,30 @@ fn runtime_spec(id: &str) -> Result<registry::ExtensionSpec, String> {
     Ok(spec)
 }
 
+/// Whether the installed build of this extension uses the runtime at all.
+fn runtime_needed(spec: &registry::ExtensionSpec, id: &str) -> bool {
+    spec.runtime.as_ref()
+        .map_or(false, |rt| runtime::needed(rt, install::read_installed_version(id).as_deref()))
+}
+
+/// Retire old versions / leftover trash without holding up the command (deletes can be slow).
+fn sweep_in_background(base: &std::path::Path) {
+    let base = base.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || runtime::sweep_old(&base));
+}
+
 #[tauri::command]
 async fn runtime_status(id: String) -> Result<RuntimeStatus, String> {
     let spec = runtime_spec(&id)?;
+    let base = runtime_base(&id);
+    sweep_in_background(&base);
     let flavour = runtime::detect_flavour(&system32());
-    let cur = runtime::current(&runtime_base(&id));
-    // A failed lookup (offline) shouldn't hide what's installed.
-    let latest = latest_runtime_version(&spec).await.unwrap_or(None);
+    let cur = runtime::current(&base);
+    let needed = runtime_needed(&spec, &id);
+    // A failed lookup (offline) shouldn't hide what's installed. Not needed → don't ask GitHub.
+    let latest = if needed { latest_runtime_version(&spec).await.unwrap_or(None) } else { None };
     Ok(RuntimeStatus {
+        needed,
         installed: cur.is_some(),
         version: cur.map(|p| p.version),
         flavour: flavour.as_str(),
@@ -225,17 +237,26 @@ async fn download_to(
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
-    let _ = app.emit("runtime-progress", serde_json::json!({ "id": id, "downloaded": downloaded, "total": total }));
+    // Download done; install_zip (~40 s for the cuda runtime) runs next.
+    let _ = app.emit("runtime-progress",
+        serde_json::json!({ "id": id, "downloaded": downloaded, "total": total, "phase": "unpacking" }));
     Ok(())
 }
 
 #[tauri::command]
 async fn ensure_runtime(app: tauri::AppHandle, id: String) -> Result<String, String> {
     let spec = runtime_spec(&id)?;
-    let tag_prefix = spec.runtime.as_ref().map(|r| r.tag_prefix.clone()).unwrap_or_default();
+    let rt = spec.runtime.clone().ok_or_else(|| format!("{} has no runtime.", spec.name))?;
+    if !runtime_needed(&spec, &id) {
+        let have = install::read_installed_version(&id).unwrap_or_else(|| "(not installed)".into());
+        return Err(format!("{} {} doesn't use the runtime (needed from {} on), so there's nothing to set up.",
+                           spec.name, have, rt.from_version));
+    }
+    let tag_prefix = rt.tag_prefix.clone();
     let version = latest_runtime_version(&spec).await?
         .ok_or_else(|| "No runtime has been released yet.".to_string())?;
     let base = runtime_base(&id);
+    sweep_in_background(&base);
     if let Some(cur) = runtime::current(&base) {
         if cur.version == version { return Ok(version); }
     }
@@ -261,6 +282,10 @@ async fn ensure_runtime(app: tauri::AppHandle, id: String) -> Result<String, Str
                 attempt.stop()
             }
         }))
+        // No overall timeout (the cuda runtime is ~800 MB); a stalled connection errors out
+        // instead, and the failure path below deletes download.part.
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .read_timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Download failed: {}", e))?;
 

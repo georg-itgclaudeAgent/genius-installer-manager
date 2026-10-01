@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fetchLatestRelease } from "../api/github";
 import type { ExtensionSpec } from "../api/registry";
-import { deriveState, ExtensionState, StatusInfo, RuntimeStatus, RuntimeProgress } from "./useExtensionStatus.logic";
+import { deriveState, runtimeNeededFor, ExtensionState, StatusInfo, RuntimeStatus, RuntimeProgress } from "./useExtensionStatus.logic";
 
 export type { ExtensionState } from "./useExtensionStatus.logic";
 
@@ -37,8 +37,8 @@ export function useExtensionStatus(spec: ExtensionSpec): UseExtensionStatusResul
     if (!hasRuntime) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    listen<{ id: string; downloaded: number; total: number | null }>("runtime-progress", (e) => {
-      if (e.payload.id === spec.id) setProgress({ downloaded: e.payload.downloaded, total: e.payload.total });
+    listen<{ id: string; downloaded: number; total: number | null; phase?: "unpacking" }>("runtime-progress", (e) => {
+      if (e.payload.id === spec.id) setProgress({ downloaded: e.payload.downloaded, total: e.payload.total, phase: e.payload.phase });
     }).then((u) => { if (cancelled) u(); else unlisten = u; }).catch(() => {});
     return () => { cancelled = true; unlisten?.(); };
   }, [hasRuntime, spec.id]);
@@ -89,14 +89,15 @@ export function useExtensionStatus(spec: ExtensionSpec): UseExtensionStatusResul
     setBusy(true);
     try {
       await invoke<string>("install_from_url", { id: spec.id, url: state.latest.zipUrl });
-      if (hasRuntime) await setupRuntime();
+      // Builds older than the runtime's from_version (the 0.1.0 preview) don't use it.
+      if (runtimeNeededFor(spec.runtime, state.latest.version)) await setupRuntime();
       await refresh();
     } catch (e: any) {
       setState({ kind: "error", reason: e?.message || String(e) });
     } finally {
       setBusy(false);
     }
-  }, [state, spec.id, refresh, hasRuntime, setupRuntime]);
+  }, [state, spec.id, spec.runtime, refresh, setupRuntime]);
 
   const uninstall = useCallback(async () => {
     setBusy(true);

@@ -1127,6 +1127,7 @@ dependencies = [
 name = "genius-installer-manager"
 version = "0.2.0"
 dependencies = [
+ "crc32fast",
  "futures-util",
  "lzma-rs",
  "reqwest 0.12.28",

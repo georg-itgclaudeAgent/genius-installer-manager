@@ -28,7 +28,7 @@ export interface RawRelease {
   assets: RawAsset[];
 }
 
-function parseSemver(v: string): [number, number, number] | null {
+export function parseSemver(v: string): [number, number, number] | null {
   const m = v.match(VERSION_REGEX);
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3])];

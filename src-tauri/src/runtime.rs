@@ -1,7 +1,7 @@
 //! Genius Cut's one-time runtime (embeddable Python + Whisper + NVIDIA libraries), installed
 //! next to — not inside — the extension, so extension updates stay small.
 
-use crate::registry::ExtensionSpec;
+use crate::registry::{ExtensionSpec, RuntimeSpec};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -25,9 +25,22 @@ pub fn detect_flavour(system32: &Path) -> Flavour {
 
 pub fn asset_name(f: Flavour, version: &str) -> String { format!("genius-cut-runtime-{}-{}.zip", f.as_str(), version) }
 
-fn is_semver(s: &str) -> bool {
+pub fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
     let parts: Vec<&str> = s.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    if parts.len() != 3 { return None; }
+    let n = |p: &str| if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) { p.parse::<u64>().ok() } else { None };
+    Some((n(parts[0])?, n(parts[1])?, n(parts[2])?))
+}
+
+pub fn is_semver(s: &str) -> bool { parse_semver(s).is_some() }
+
+/// Only extension builds from `from_version` on have a backend that uses the runtime (the
+/// 0.1.0 preview runs on sample data). An unknown or unparsable version doesn't need it.
+pub fn needed(rt: &RuntimeSpec, extension_version: Option<&str>) -> bool {
+    match (extension_version.and_then(parse_semver), parse_semver(&rt.from_version)) {
+        (Some(v), Some(from)) => v >= from,
+        _ => false,
+    }
 }
 
 pub fn is_allowed_runtime_url(url: &str, spec: &ExtensionSpec) -> bool {
@@ -55,15 +68,39 @@ pub fn current(base: &Path) -> Option<Pointer> {
     Path::new(&p.python).is_file().then_some(p)
 }
 
+/// Passes writes through while computing their CRC32, so the custom LZMA path below gets the
+/// same integrity check the zip crate applies to its own readers.
+struct CrcWriter<W: std::io::Write> { inner: W, hasher: crc32fast::Hasher }
+
+impl<W: std::io::Write> CrcWriter<W> {
+    fn new(inner: W) -> Self { CrcWriter { inner, hasher: crc32fast::Hasher::new() } }
+    /// Flush and compare against the CRC32 recorded in the zip entry.
+    fn finish(mut self, expected: u32) -> Result<W, String> {
+        std::io::Write::flush(&mut self.inner).map_err(|e| e.to_string())?;
+        let got = self.hasher.finalize();
+        if got != expected { return Err(format!("CRC mismatch (expected {:08x}, got {:08x})", expected, got)); }
+        Ok(self.inner)
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for CrcWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() }
+}
+
 /// Unpack every entry into `dest`. Entries using LZMA (zip method 14, what the runtime is built
 /// with) are decoded here because the zip crate's own LZMA reader mis-parses the 4-byte zip
 /// LZMA header that precedes the stream and fails on real archives. Everything else goes through
 /// the zip crate. Entry names are checked with `enclosed_name`, so zip-slip entries are skipped.
 fn extract_all(archive: &mut zip::ZipArchive<std::fs::File>, dest: &Path) -> Result<(), String> {
     for i in 0..archive.len() {
-        let (name, is_dir, method, size) = {
+        let (name, is_dir, method, size, crc) = {
             let f = archive.by_index_raw(i).map_err(|e| e.to_string())?;
-            (f.enclosed_name(), f.is_dir(), f.compression(), f.size())
+            (f.enclosed_name(), f.is_dir(), f.compression(), f.size(), f.crc32())
         };
         let Some(rel) = name else { continue };
         let out_path = dest.join(rel);
@@ -82,7 +119,9 @@ fn extract_all(archive: &mut zip::ZipArchive<std::fs::File>, dest: &Path) -> Res
             let mut head = props.to_vec();
             head.extend_from_slice(&size.to_le_bytes());
             let mut input = std::io::BufReader::new(std::io::Read::chain(std::io::Cursor::new(head), raw));
-            lzma_rs::lzma_decompress(&mut input, &mut out).map_err(|e| format!("{}: {:?}", out_path.display(), e))?;
+            let mut checked = CrcWriter::new(&mut out);
+            lzma_rs::lzma_decompress(&mut input, &mut checked).map_err(|e| format!("{}: {:?}", out_path.display(), e))?;
+            checked.finish(crc).map_err(|e| format!("{}: {}", out_path.display(), e))?;
         } else {
             let mut f = archive.by_index(i).map_err(|e| e.to_string())?;
             std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
@@ -92,9 +131,78 @@ fn extract_all(archive: &mut zip::ZipArchive<std::fs::File>, dest: &Path) -> Res
     Ok(())
 }
 
+/// Bases with an install in progress; a sweep skips them so it never retires a version that
+/// is about to become current.
+static BUSY: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+struct BusyGuard(PathBuf);
+
+impl BusyGuard {
+    fn try_claim(base: &Path) -> Option<BusyGuard> {
+        let mut busy = BUSY.lock().unwrap_or_else(|e| e.into_inner());
+        if busy.iter().any(|b| b == base) { return None; }
+        busy.push(base.to_path_buf());
+        Some(BusyGuard(base.to_path_buf()))
+    }
+    fn claim(base: &Path) -> BusyGuard {
+        loop {
+            if let Some(g) = BusyGuard::try_claim(base) { return g; }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        let mut busy = BUSY.lock().unwrap_or_else(|e| e.into_inner());
+        busy.retain(|b| b != &self.0);
+    }
+}
+
+/// The version runtime.json names, whether or not its python.exe still exists.
+fn pointed_version(base: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(base.join("runtime.json")).ok()?;
+    serde_json::from_str::<Pointer>(&text).ok().map(|p| p.version)
+}
+
+/// Move a version folder aside, then delete it. Renaming a folder that holds an open file
+/// (a running python.exe) fails cleanly on Windows, so an in-use runtime is left whole rather
+/// than half-deleted under the running backend; a later sweep retries it.
+fn retire(root: &Path, dir: &Path) -> bool {
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let trash = root.join(format!(".trash-{}", name));
+    let _ = std::fs::remove_dir_all(&trash);
+    if std::fs::rename(dir, &trash).is_err() { return false; }
+    let _ = std::fs::remove_dir_all(&trash);
+    true
+}
+
+fn sweep_claimed(base: &Path) {
+    let root = base.join("runtime");
+    let keep = pointed_version(base);
+    let Ok(entries) = std::fs::read_dir(&root) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if !p.is_dir() { continue; }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with(".trash-") {
+            let _ = std::fs::remove_dir_all(&p);
+        } else if !name.starts_with(".staging-") && Some(&name) != keep.as_ref() {
+            retire(&root, &p);
+        }
+    }
+}
+
+/// Best-effort cleanup of old versions and leftover `.trash-*` folders. Never touches the
+/// version runtime.json points at, and skips a base while an install is running there.
+pub fn sweep_old(base: &Path) {
+    if let Some(_g) = BusyGuard::try_claim(base) { sweep_claimed(base); }
+}
+
 pub fn install_zip(base: &Path, version: &str, flavour: Flavour, zip_path: &Path, expected_sha256: &str)
     -> Result<PathBuf, String> {
     if !is_semver(version) { return Err(format!("Invalid runtime version {:?}", version)); }
+    let _busy = BusyGuard::claim(base);
     let got = sha256_file(zip_path)?;
     if !got.eq_ignore_ascii_case(expected_sha256.trim()) {
         return Err("The runtime download failed its checksum, so nothing was installed. Try again.".into());
@@ -109,20 +217,19 @@ pub fn install_zip(base: &Path, version: &str, flavour: Flavour, zip_path: &Path
     extract_all(&mut archive, &staging).map_err(|e| { let _ = std::fs::remove_dir_all(&staging); format!("Couldn't unpack the runtime: {}", e) })?;
     let python = staging.join("python.exe");
     if !python.is_file() { let _ = std::fs::remove_dir_all(&staging); return Err("The runtime has no python.exe.".into()); }
-    let _ = std::fs::remove_dir_all(&target);
+    if target.exists() && !retire(&root, &target) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("Runtime {} is in use. Close Premiere and try again.", version));
+    }
     std::fs::rename(&staging, &target).map_err(|e| e.to_string())?;
     let pointer = Pointer { version: version.into(), flavour: flavour.as_str().into(),
                             python: target.join("python.exe").to_string_lossy().into() };
     let tmp = base.join("runtime.json.tmp");
     std::fs::write(&tmp, serde_json::to_string_pretty(&pointer).unwrap()).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, base.join("runtime.json")).map_err(|e| e.to_string())?;
-    // Best effort: an old version still in use (python.exe running) is cleaned up next time.
-    if let Ok(entries) = std::fs::read_dir(&root) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p != target && p.is_dir() { let _ = std::fs::remove_dir_all(&p); }
-        }
-    }
+    // Best effort: an old version still in use (python.exe running) stays whole and is
+    // cleaned up by a later sweep.
+    sweep_claimed(base);
     Ok(target.join("python.exe"))
 }
 
@@ -210,18 +317,66 @@ mod tests {
     }
 
     #[test]
-    fn an_old_version_that_cannot_be_deleted_does_not_fail_the_upgrade() {
-        // Review Focus 3: the old python.exe is still running. Simulated with a read-only file
-        // the cleanup can't remove; the pointer must still move to the new version.
+    #[cfg(windows)]
+    fn an_old_version_in_use_is_left_intact_then_swept_once_released() {
+        // Review Focus 3 / I2: the old python.exe is still running. A real lock (no
+        // FILE_SHARE_DELETE) is what a running backend holds; the pointer must move, and the
+        // old folder must stay whole (not half-deleted under the running process).
+        use std::os::windows::fs::OpenOptionsExt;
         let base = tempfile::tempdir().unwrap();
         let (z1, s1) = fake_runtime_zip(base.path(), "a.zip");
         install_zip(base.path(), "1.0.0", Flavour::Cpu, &z1, &s1).unwrap();
-        let locked = base.path().join("runtime/1.0.0/python.exe");
-        let mut perm = std::fs::metadata(&locked).unwrap().permissions(); perm.set_readonly(true);
-        std::fs::set_permissions(&locked, perm).unwrap();
+        let old = base.path().join("runtime/1.0.0");
+        let sibling = old.join("Lib/site-packages/faster_whisper/__init__.py");
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(1 /* FILE_SHARE_READ */)
+            .open(old.join("python.exe")).unwrap();
         let (z2, s2) = fake_runtime_zip(base.path(), "b.zip");
         assert!(install_zip(base.path(), "1.1.0", Flavour::Cpu, &z2, &s2).is_ok());
         assert_eq!(current(base.path()).unwrap().version, "1.1.0");
+        assert!(old.join("python.exe").is_file() && sibling.is_file(), "old runtime was half-deleted");
+        drop(lock);
+        sweep_old(base.path());
+        assert!(!old.exists(), "old version not swept after release");
+        assert!(base.path().join("runtime/1.1.0/python.exe").is_file());
+    }
+
+    #[test]
+    fn sweep_removes_trash_and_stale_versions_but_never_the_current_one() {
+        let base = tempfile::tempdir().unwrap();
+        let (z, s) = fake_runtime_zip(base.path(), "a.zip");
+        install_zip(base.path(), "1.0.0", Flavour::Cpu, &z, &s).unwrap();
+        let root = base.path().join("runtime");
+        std::fs::create_dir_all(root.join(".trash-0.9.0/x")).unwrap();
+        std::fs::create_dir_all(root.join("0.9.0/Lib")).unwrap();
+        std::fs::create_dir_all(root.join(".staging-1.1.0")).unwrap();
+        sweep_old(base.path());
+        assert!(!root.join(".trash-0.9.0").exists() && !root.join("0.9.0").exists());
+        assert!(root.join("1.0.0/python.exe").is_file(), "swept the current version");
+        assert!(root.join(".staging-1.1.0").exists(), "swept an install in progress");
+        // A stale pointer (python.exe gone) still protects the version it names.
+        std::fs::remove_file(root.join("1.0.0/python.exe")).unwrap();
+        sweep_old(base.path());
+        assert!(root.join("1.0.0").exists());
+    }
+
+    #[test]
+    fn crc_writer_passes_data_through_and_checks_the_entry_crc() {
+        use std::io::Write as _;
+        let data = b"MZ fake lzma payload".repeat(10);
+        let mut w = CrcWriter::new(Vec::new());
+        w.write_all(&data).unwrap();
+        assert_eq!(w.finish(crc32fast::hash(&data)).unwrap(), data);
+        let mut w = CrcWriter::new(Vec::new());
+        w.write_all(&data).unwrap();
+        assert!(w.finish(crc32fast::hash(&data) ^ 1).unwrap_err().contains("CRC mismatch"));
+    }
+
+    #[test]
+    fn runtime_is_needed_only_from_its_first_extension_version() {
+        let rt = RuntimeSpec { tag_prefix: "runtime-v".into(), from_version: "0.2.0".into() };
+        assert!(!needed(&rt, Some("0.1.0")), "the 0.1.0 preview has no backend");
+        assert!(needed(&rt, Some("0.2.0")) && needed(&rt, Some("0.10.0")) && needed(&rt, Some("1.0.0")));
+        assert!(!needed(&rt, None) && !needed(&rt, Some("junk")));
     }
 
     #[test]
