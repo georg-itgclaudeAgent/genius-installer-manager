@@ -25,21 +25,29 @@ pub struct ExtensionSpec {
     /// GitHub repo under georg-itgclaudeAgent.
     pub repo: String,
     pub tag_prefix: String,
+    /// Optional one-time runtime published in the same repo under its own tag prefix.
+    #[serde(default)]
+    pub runtime: Option<RuntimeSpec>,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RuntimeSpec { pub tag_prefix: String }
 
 fn spec(id: &str, name: &str, subtitle: &str, icon: &str, repo: &str, tag_prefix: &str) -> ExtensionSpec {
     ExtensionSpec {
         id: id.into(), name: name.into(), subtitle: subtitle.into(),
-        icon: icon.into(), repo: repo.into(), tag_prefix: tag_prefix.into(),
+        icon: icon.into(), repo: repo.into(), tag_prefix: tag_prefix.into(), runtime: None,
     }
 }
 
 pub fn builtin() -> Vec<ExtensionSpec> {
+    let mut gc = spec("com.attract.genius-cut", "Genius Cut",
+             "For Adobe Premiere Pro · Transcript-driven trimming", "GC", "genius-cut", "v");
+    gc.runtime = Some(RuntimeSpec { tag_prefix: "runtime-v".into() });
     vec![
         spec("com.attract.pr-extension", "PR Extension",
              "For Adobe Premiere Pro · ElevenLabs + HeyGen + Assets", "PR", "pr-extension", "extension-v"),
-        spec("com.attract.genius-cut", "Genius Cut",
-             "For Adobe Premiere Pro · Transcript-driven trimming", "GC", "genius-cut", "v"),
+        gc,
     ]
 }
 
@@ -74,6 +82,12 @@ fn check(e: &ExtensionSpec) -> Result<(), String> {
     if n(&e.name) == 0 || n(&e.name) > 60 { return Err(format!("{}: name must be 1-60 characters", e.id)); }
     if n(&e.subtitle) > 120 { return Err(format!("{}: subtitle is longer than 120 characters", e.id)); }
     if n(&e.icon) == 0 || n(&e.icon) > 3 { return Err(format!("{}: icon must be 1-3 characters", e.id)); }
+    if let Some(rt) = &e.runtime {
+        if !valid_prefix(&rt.tag_prefix) { return Err(format!("{}: invalid runtime tag_prefix {:?}", e.id, rt.tag_prefix)); }
+        if rt.tag_prefix.starts_with(&e.tag_prefix) || e.tag_prefix.starts_with(&rt.tag_prefix) {
+            return Err(format!("{}: shares a runtime prefix with its own releases", e.id));
+        }
+    }
     Ok(())
 }
 
@@ -107,6 +121,7 @@ pub fn merge(remote: Vec<ExtensionSpec>, builtin: Vec<ExtensionSpec>) -> Vec<Ext
             if let Some(b) = builtin.iter().find(|b| b.id == r.id) {
                 r.repo = b.repo.clone();
                 r.tag_prefix = b.tag_prefix.clone();
+                r.runtime = b.runtime.clone();
             }
             r
         })
@@ -236,6 +251,19 @@ mod tests {
             let r = find_in(&list, &b.id).unwrap_or_else(|| panic!("registry.json is missing {}", b.id));
             assert_eq!((r.repo.as_str(), r.tag_prefix.as_str()), (b.repo.as_str(), b.tag_prefix.as_str()));
         }
+    }
+
+    #[test]
+    fn runtime_field_is_optional_and_validated() {
+        let with = r#"{"version": 1, "extensions": [
+          {"id": "com.attract.genius-cut", "name": "Genius Cut", "subtitle": "", "icon": "GC", "repo": "genius-cut", "tag_prefix": "v",
+           "runtime": {"tag_prefix": "runtime-v"}}]}"#;
+        assert_eq!(parse(with).unwrap()[0].runtime.as_ref().unwrap().tag_prefix, "runtime-v");
+        let bad = with.replace("runtime-v", "../v");
+        assert!(parse(&bad).is_err());
+        let clash = with.replace(r#""tag_prefix": "runtime-v""#, r#""tag_prefix": "v""#);
+        assert!(parse(&clash).unwrap_err().contains("runtime"));
+        assert!(parse(GOOD).unwrap()[0].runtime.is_none());
     }
 
     #[test]

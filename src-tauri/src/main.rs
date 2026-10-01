@@ -5,6 +5,7 @@ mod install;
 mod legacy;
 mod paths;
 mod registry;
+mod runtime;
 
 use serde::Serialize;
 
