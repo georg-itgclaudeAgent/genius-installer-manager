@@ -9,6 +9,7 @@ src-tauri/gen/schemas/
 .DS_Store
 Thumbs.db
 *.zip
+!src-tauri/fixtures/*.zip
 *.exe
 .env
 .env.local
