@@ -265,6 +265,21 @@ mod tests {
         assert_eq!(read_version_at(&pr).as_deref(), Some("1.2.0"));
     }
 
+    /// Manual check of a real release: GENIUSCUT_RELEASE_ZIP=<path> cargo test -- --ignored real_release
+    #[test]
+    #[ignore]
+    fn real_release_zip_installs_through_the_same_path_as_the_app() {
+        let zip = std::env::var("GENIUSCUT_RELEASE_ZIP").expect("set GENIUSCUT_RELEASE_ZIP");
+        let id = std::env::var("GENIUSCUT_RELEASE_ID").unwrap_or_else(|_| GC.to_string());
+        let bytes = std::fs::read(&zip).unwrap();
+        let base = tempfile::tempdir().unwrap();
+        install_zip_under(base.path(), &id, &bytes).expect("the installer must accept this release");
+        let dir = paths::install_dir_under(base.path(), &id).unwrap();
+        println!("installed version {:?}", read_version_at(&dir));
+        assert!(dir.join("CSXS/manifest.xml").exists() && dir.join("client/dist/index.html").exists());
+        assert!(leftovers(base.path()).is_empty());
+    }
+
     #[test]
     fn read_version_missing_dir_is_none() {
         let base = tempfile::tempdir().unwrap();

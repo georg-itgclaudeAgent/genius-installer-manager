@@ -49,6 +49,12 @@ mod tests {
         "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/genius-cut-0.1.0.zip";
 
     #[test]
+    fn allows_the_published_genius_cut_0_1_0_asset() {
+        assert!(is_allowed_download_url(
+            "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/genius-cut-0.1.0.zip", &gc()));
+    }
+
+    #[test]
     fn refuses_genius_cut_zip_from_the_wrong_repo() {
         assert!(!is_allowed_download_url(
             "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/v0.1.0/genius-cut-0.1.0.zip",
