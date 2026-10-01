@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "extensions": [
+    {
+      "id": "com.attract.pr-extension",
+      "name": "PR Extension",
+      "subtitle": "For Adobe Premiere Pro · ElevenLabs + HeyGen + Assets",
+      "icon": "PR",
+      "repo": "pr-extension",
+      "tag_prefix": "extension-v"
+    },
+    {
+      "id": "com.attract.genius-cut",
+      "name": "Genius Cut",
+      "subtitle": "For Adobe Premiere Pro · Transcript-driven trimming",
+      "icon": "GC",
+      "repo": "genius-cut",
+      "tag_prefix": "v"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-use crate::paths::ExtensionSpec;
+use crate::registry::ExtensionSpec;
 use reqwest::Url;
 
 const OWNER: &str = "georg-itgclaudeAgent";
@@ -21,8 +21,8 @@ pub fn is_allowed_download_url(url: &str, spec: &ExtensionSpec) -> bool {
     matches!(segs.as_slice(),
         [owner, repo, "releases", "download", tag, file]
             if *owner == OWNER
-            && *repo == spec.repo
-            && tag.starts_with(spec.tag_prefix)
+            && *repo == spec.repo.as_str()
+            && tag.starts_with(spec.tag_prefix.as_str())
             && file.ends_with(".zip"))
 }
 
@@ -40,10 +40,10 @@ pub fn is_allowed_redirect(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths;
+    use crate::registry;
 
-    fn gc() -> &'static paths::ExtensionSpec { paths::find("com.attract.genius-cut").unwrap() }
-    fn pr() -> &'static paths::ExtensionSpec { paths::find("com.attract.pr-extension").unwrap() }
+    fn gc() -> registry::ExtensionSpec { registry::find("com.attract.genius-cut").unwrap() }
+    fn pr() -> registry::ExtensionSpec { registry::find("com.attract.pr-extension").unwrap() }
 
     const GC_ZIP: &str =
         "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/genius-cut-0.1.0.zip";
@@ -52,21 +52,21 @@ mod tests {
     fn refuses_genius_cut_zip_from_the_wrong_repo() {
         assert!(!is_allowed_download_url(
             "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/v0.1.0/genius-cut-0.1.0.zip",
-            gc()));
+            &gc()));
     }
 
     #[test]
     fn allows_this_extensions_own_release_asset() {
-        assert!(is_allowed_download_url(GC_ZIP, gc()));
+        assert!(is_allowed_download_url(GC_ZIP, &gc()));
         assert!(is_allowed_download_url(
             "https://github.com/georg-itgclaudeAgent/pr-extension/releases/download/extension-v1.2.0/pr-extension-1.2.0.zip",
-            pr()));
+            &pr()));
     }
 
     #[test]
     fn refuses_another_extensions_release() {
         // Genius Cut zip must never be extracted into the PR Extension folder.
-        assert!(!is_allowed_download_url(GC_ZIP, pr()));
+        assert!(!is_allowed_download_url(GC_ZIP, &pr()));
     }
 
     #[test]
@@ -76,7 +76,7 @@ mod tests {
             "https://github.com/georg-itgclaudeAgent/%2e%2e/evil/genius-cut/releases/download/v0.1.0/x.zip",
             "https://github.com/georg-itgclaudeAgent/genius-cut/releases/download/v0.1.0/../../../../evil/x.zip",
         ] {
-            assert!(!is_allowed_download_url(bad, gc()), "allowed {:?}", bad);
+            assert!(!is_allowed_download_url(bad, &gc()), "allowed {:?}", bad);
         }
     }
 
@@ -93,7 +93,7 @@ mod tests {
             "file:///C:/Windows/system32",
             "",
         ] {
-            assert!(!is_allowed_download_url(bad, gc()), "allowed {:?}", bad);
+            assert!(!is_allowed_download_url(bad, &gc()), "allowed {:?}", bad);
         }
     }
 

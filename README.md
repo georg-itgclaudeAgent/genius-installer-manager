@@ -16,10 +16,18 @@ and run it once. The app updates itself from then on.
 
 ## Adding an extension
 
-Add an entry to `EXTENSIONS` in `src-tauri/src/paths.rs`: a unique bundle id, display
-name, subtitle, two-letter icon, repo and tag prefix. The extension's repo must be public
-and publish a release with a `.zip` whose `CSXS/manifest.xml` declares the same
+Edit [`registry.json`](registry.json) on `main` and add an entry: a unique bundle id
+(`com.attract.<name>`), display name, subtitle, 1-3 letter icon, repo and tag prefix.
+Every installed copy picks it up on its next launch, or when someone presses **Check for
+updates**, and shows it with a **NEW APP** badge. No installer release is needed.
+
+The extension's repo must be public, under `georg-itgclaudeAgent`, and publish releases
+tagged `<tag_prefix>X.Y.Z` with a `.zip` whose `CSXS/manifest.xml` declares the same
 `ExtensionBundleId`. The installer refuses a zip built for a different extension.
+
+Safety: entries are validated, an invalid `registry.json` is ignored (the last good copy is
+used), and for apps built into the installer the repo and tag prefix can't be changed
+remotely. `cargo test` checks `registry.json` too, so run it before pushing an edit.
 
 ## Development
 

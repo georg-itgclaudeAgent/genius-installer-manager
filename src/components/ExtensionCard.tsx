@@ -11,6 +11,8 @@ interface ExtensionCardProps {
   onUpdate: () => void;
   onUninstall: () => void;
   onRetry: () => void;
+  /** Newly added to the app list since the last launch. */
+  isNew?: boolean;
 }
 
 function summarizeNotes(notes: string): string[] {
@@ -31,13 +33,15 @@ export const ExtensionCard: React.FC<ExtensionCardProps> = ({
   onUpdate,
   onUninstall,
   onRetry,
+  isNew,
 }) => {
   const isUpdateAvailable = state.kind === "update-available";
   const cardBorderClass = isUpdateAvailable ? "card highlight" : "card";
 
   return (
     <div className={cardBorderClass}>
-      {isUpdateAvailable && <span className="card-new-pill">NEW</span>}
+      {isUpdateAvailable && <span className="card-new-pill">UPDATE</span>}
+      {isNew && !isUpdateAvailable && <span className="card-new-pill">NEW APP</span>}
       <div className="card-row">
         <div className="card-icon">{spec.icon}</div>
         <div className="card-meta">
