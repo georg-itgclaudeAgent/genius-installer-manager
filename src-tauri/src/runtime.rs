@@ -248,4 +248,17 @@ mod tests {
         assert!(base.path().join("runtime/1.0.0/Lib/site-packages/faster_whisper/data.txt").is_file());
         assert_eq!(current(base.path()).unwrap().flavour, "cuda");
     }
+
+    /// Manual benchmark: `GC_RUNTIME_BENCH_ZIP=<big lzma zip> cargo test --release -- --ignored --nocapture bench`
+    #[test]
+    #[ignore]
+    fn bench_install_of_a_large_lzma_zip() {
+        let Ok(zp) = std::env::var("GC_RUNTIME_BENCH_ZIP") else { eprintln!("GC_RUNTIME_BENCH_ZIP unset, skipping"); return };
+        let zp = PathBuf::from(zp);
+        let base = tempfile::tempdir().unwrap();
+        let sha = sha256_file(&zp).unwrap();
+        let t = std::time::Instant::now();
+        install_zip(base.path(), "1.0.0", Flavour::Cuda, &zp, &sha).unwrap();
+        eprintln!("install_zip took {:.1}s", t.elapsed().as_secs_f64());
+    }
 }
