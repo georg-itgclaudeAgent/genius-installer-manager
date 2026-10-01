@@ -18,32 +18,33 @@ an installer release. That is what the app's self-updater reads:
 5. `.github/workflows/release.yml` runs on Windows: builds the app, signs the updater
    payload, and creates a release (marked Latest) with
    `GeniusInstallerManager-Setup-<version>.exe`, its `.sig`, and `latest.json`.
-6. **Until old installs are retired, bridge the release** (next section).
+6. Nothing else: installed copies find the release through `releases/latest/download/latest.json`.
 
-## Updates for old "PR Extension Manager" 0.1.0 installs
+## Old "PR Extension Manager" 0.1.0 installs
 
-Those installs check `pr-extension`'s Latest release for `latest.json`. After each installer
-release, upload the new `latest.json` onto the `manager-v0.1.0` release in `pr-extension`,
-and keep that release marked Latest there:
+Those were signed with a different key (retired on 2026-10-01; its private key had been
+exposed). A 0.1.0 install can't verify updates signed with the current key, so it won't
+update itself: install `GeniusInstallerManager-Setup-<version>.exe` by hand once from the
+release page. The new app removes the old "PR Extension Manager" copy on first start, and
+updates itself from then on. Don't upload new `latest.json` files to `pr-extension`'s
+`manager-v0.1.0` release: 0.1.0 would download them and fail the signature check.
+
+## Signing key
+
+The updater key pair is stored in GCP Secret Manager, project `agent-georg`:
+
+| Secret | What |
+|---|---|
+| `GENIUS_INSTALLER_SIGNING_KEY` | Private key (the file `tauri signer generate` writes) |
+| `GENIUS_INSTALLER_SIGNING_KEY_PASSWORD` | Its password |
+| `GENIUS_INSTALLER_SIGNING_PUBKEY` | Public key; must equal `plugins.updater.pubkey` in `src-tauri/tauri.conf.json` |
+
+The public key is built into every installed copy. **Never change it** unless you accept that
+existing installs will stop updating themselves and need one manual install.
+
+The repo's Actions secrets are filled from Secret Manager without the values ever being shown:
 
 ```bash
-gh release download v0.3.0 -p latest.json -R georg-itgclaudeAgent/genius-installer-manager --clobber
-gh release upload manager-v0.1.0 latest.json --clobber -R georg-itgclaudeAgent/pr-extension
-```
-
-The `url` inside `latest.json` points at this repo's exe, and the signature verifies with
-the unchanged key. So an old install updates straight to the renamed app, which then
-removes the old "PR Extension Manager" copy on first start.
-
-## Signing keys
-
-The updater key pair was created once with `tauri signer generate`. The public key is
-`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. **Never change it**: existing
-installs only accept updates signed by the matching private key.
-
-The repo needs two Actions secrets:
-
-```bash
-gh secret set TAURI_PRIVATE_KEY -R georg-itgclaudeAgent/genius-installer-manager < ~/.tauri/pr-extension-manager.key
-gh secret set TAURI_KEY_PASSWORD -R georg-itgclaudeAgent/genius-installer-manager   # prompts; nothing echoed
+gcloud secrets versions access latest --secret=GENIUS_INSTALLER_SIGNING_KEY --project=agent-georg   | gh secret set TAURI_PRIVATE_KEY -R georg-itgclaudeAgent/genius-installer-manager
+gcloud secrets versions access latest --secret=GENIUS_INSTALLER_SIGNING_KEY_PASSWORD --project=agent-georg   | gh secret set TAURI_KEY_PASSWORD -R georg-itgclaudeAgent/genius-installer-manager
 ```
