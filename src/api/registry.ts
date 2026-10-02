@@ -8,7 +8,11 @@ export interface ExtensionSpec {
   icon: string;
   repo: string;
   tag_prefix: string;
+  runtime?: RuntimeSpec;
 }
+
+/** Mirrors `registry::RuntimeSpec`: the runtime is used from extension `from_version` on. */
+export interface RuntimeSpec { tag_prefix: string; from_version: string }
 
 export function listExtensions(): Promise<ExtensionSpec[]> {
   return invoke<ExtensionSpec[]>("list_extensions");

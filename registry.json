@@ -15,7 +15,8 @@
       "subtitle": "For Adobe Premiere Pro · Transcript-driven trimming",
       "icon": "GC",
       "repo": "genius-cut",
-      "tag_prefix": "v"
+      "tag_prefix": "v",
+      "runtime": { "tag_prefix": "runtime-v", "from_version": "0.2.0" }
     }
   ]
 }

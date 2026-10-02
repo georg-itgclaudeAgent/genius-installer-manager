@@ -33,6 +33,10 @@ const ManagedExtension: React.FC<{
       state={ext.state}
       busy={ext.busy}
       premiereWarning={ext.premiereWarning}
+      runtime={ext.runtime}
+      progress={ext.progress}
+      runtimeError={ext.runtimeError}
+      onFinishSetup={ext.finishSetup}
       onInstall={ext.install}
       onUpdate={ext.install}
       onUninstall={ext.uninstall}
